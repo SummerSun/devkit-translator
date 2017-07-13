@@ -16,10 +16,12 @@ using Newtonsoft.Json;
 
 public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceWriter log)
 {
-    Stream data;
+    byte[] data;
+    SpeechClient speechClient;
     try
     {
-        data = await req.Content.ReadAsStreamAsync();
+        data = await req.Content.ReadAsByteArrayAsync();
+        speechClient = new SpeechClient(req.Headers.GetValues("source").FirstOrDefault(), req.Headers.GetValues("target").FirstOrDefault());
     }
     catch(Exception ex)
     {
@@ -27,7 +29,6 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
     }
     var connectionString = "";
     var serviceClient = ServiceClient.CreateFromConnectionString(connectionString);
-    var speechClient = new SpeechClient("zh-CN", "en");
     var textDecoder = TextMessageDecoder.CreateTranslateDecoder();
     speechClient.OnTextData += (c, a) => { textDecoder.AppendData(a); };
     speechClient.OnEndOfTextData += (c, a) =>
@@ -41,6 +42,7 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
                 var c2dTask = Task.Factory.StartNew(()=>serviceClient.SendAsync("AZ3166", new Message(Encoding.ASCII.GetBytes(final.Translation))));
                 var disconnectTask = Task.Factory.StartNew(speechClient.Disconnect);
                 Task.WaitAll(c2dTask, disconnectTask);
+                Task.WaitAll(disconnectTask);
                 log.Info("Translation result: " + final.Translation);
             }
         });
@@ -48,31 +50,27 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
 
     await speechClient.Connect();
     await speechClient.SendMessage(new ArraySegment<byte>(GetWaveHeader()));
-    using(var ms = new MemoryStream())
+    var audioSource = new AudioSourceCollection(new IAudioSource[]
     {
-        data.CopyTo(ms);
-        var audioSource = new AudioSourceCollection(new IAudioSource[]
-        {
-            new WavFileAudioSource(ms.ToArray()),
-            new WavSilenceAudioSource()
-         });
-        var handle = new AutoResetEvent(true);
-        var audioChunkSizeInMs = 100;
-        var audioChunkSizeInTicks = TimeSpan.TicksPerMillisecond * (long)(audioChunkSizeInMs);
-        var tnext = DateTime.Now.Ticks + audioChunkSizeInMs;
-        var wait = audioChunkSizeInMs;
+        new WavFileAudioSource(data.ToArray()),
+        new WavSilenceAudioSource()
+    });
+    var handle = new AutoResetEvent(true);
+    var audioChunkSizeInMs = 100;
+    var audioChunkSizeInTicks = TimeSpan.TicksPerMillisecond * (long)(audioChunkSizeInMs);
+    var tnext = DateTime.Now.Ticks + audioChunkSizeInMs;
+    var wait = audioChunkSizeInMs;
         
-        foreach (var chunk in audioSource.Emit(audioChunkSizeInMs))
-        {
-            await speechClient.SendMessage(new ArraySegment<byte>(chunk.Array, chunk.Offset, chunk.Count));
-            handle.WaitOne(wait);
-            tnext = tnext + audioChunkSizeInTicks;
-            wait = (int)((tnext - DateTime.Now.Ticks) / TimeSpan.TicksPerMillisecond);
-            if (wait < 0) wait = 0;
-        }
-        await speechClient.ReceiveMessage();
-        return req.CreateResponse(HttpStatusCode.OK, "OK");
+    foreach (var chunk in audioSource.Emit(audioChunkSizeInMs))
+    {
+        await speechClient.SendMessage(new ArraySegment<byte>(chunk.Array, chunk.Offset, chunk.Count));
+        handle.WaitOne(wait);
+        tnext = tnext + audioChunkSizeInTicks;
+        wait = (int)((tnext - DateTime.Now.Ticks) / TimeSpan.TicksPerMillisecond);
+        if (wait < 0) wait = 0;
     }
+    await speechClient.ReceiveMessage();
+    return req.CreateResponse(HttpStatusCode.OK, "OK");
 }
 
 private static byte[] GetWaveHeader()

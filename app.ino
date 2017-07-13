@@ -1,10 +1,10 @@
 #include "Arduino.h"
+#include "AzureIotHub.h"
 #include "AudioClass.h"
 #include "AZ3166WiFi.h"
 #include "OLEDDisplay.h"
 #include "http_client.h"
-#include "iot_client.h"
-#include "mbed_memory_status.h"
+#include "iothub_client_ll.h"
 
 #define MAX_UPLOAD_SIZE (64 * 1024)
 
@@ -15,10 +15,10 @@ static int wavFileSize;
 static const uint32_t delayTimes = 1000;
 static AudioClass Audio;
 static const int audioSize = ((32000 * recordedDuration) + 44);
-static bool translated = false;
 static bool validParameters = false;
 static const char *deviceConnectionString = "";
 static const char *azureFunctionUri = "";
+static IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle;
 
 enum STATUS
 {
@@ -30,10 +30,20 @@ enum STATUS
 
 static STATUS status;
 
-static void log_time(const char *event)
+static void logTime(const char *event)
 {
     time_t t = time(NULL);
     Serial.printf("%s: %s", event, ctime(&t));
+}
+
+static void enterIdleState(bool clean = true)
+{
+    status = Idle;
+    if (clean)
+    {
+        Screen.clean();
+    }
+    Screen.print(0, "Hold B to talk");
 }
 
 static int httpTriggerTranslator(const char *content, int length)
@@ -43,10 +53,12 @@ static int httpTriggerTranslator(const char *content, int length)
         Serial.println("Content not valid");
         return -1;
     }
-    log_time("begin httppost");
-    HTTPClient client = HTTPClient(HTTP_POST, azureFunctionUri);
+    logTime("begin httppost");
+    HTTPClient client = HTTPClient(HTTP_POST, azureFunctionUri);    
+    client.set_header("source", source);
+    client.set_header("target", target);
     const Http_Response *response = client.send(content, length);
-    log_time("response back");
+    logTime("response back");
     if (response != NULL && response->status_code == 200)
     {
         return 0;
@@ -54,20 +66,65 @@ static int httpTriggerTranslator(const char *content, int length)
     return -1;
 }
 
-static void EnterIdleState()
+static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE message, void *userContextCallback)
 {
-    status = Idle;
-    Screen.clean();
-    Screen.print(0, "Hold B to talk");
+    const char *buffer;
+    size_t size;
+    IOTHUBMESSAGE_DISPOSITION_RESULT result;
+
+    if (IoTHubMessage_GetByteArray(message, (const unsigned char **)&buffer, &size) != IOTHUB_MESSAGE_OK)
+    {
+        Screen.print(1, "unable to do IoTHubMessage_GetByteArray", true);
+        result = IOTHUBMESSAGE_REJECTED;
+    }
+    else
+    {
+        char *temp = (char *)malloc(size + 1);
+        if (temp == NULL)
+        {
+            Screen.print(1, "Failed to malloc");
+            result = IOTHUBMESSAGE_REJECTED;
+        }
+        else
+        {
+            memcpy(temp, buffer, size);
+            temp[size] = '\0';
+            Screen.print(1, "Translation: ");
+            Screen.print(2, temp, true);
+            logTime("translated");
+            free(temp);
+            result = IOTHUBMESSAGE_ACCEPTED;
+        }
+    }
+    freeWavFile();
+    enterIdleState(false);
+    return result;
+}
+
+static int iothubInit()
+{
+    if ((iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(deviceConnectionString, MQTT_Protocol)) == NULL)
+    {
+        return -1;
+    }
+
+    if (IoTHubClient_LL_SetOption(iotHubClientHandle, "TrustedCerts", certificates) != IOTHUB_CLIENT_OK)
+    {
+        return -1;
+    }
+
+    if (IoTHubClient_LL_SetMessageCallback(iotHubClientHandle, c2dMessageCallback, NULL) != IOTHUB_CLIENT_OK)
+    {
+        return -1;
+    }
+    return 0;
 }
 
 void setup()
 {
     Screen.clean();
     Screen.print(0, "DevKitTranslator");
-    Screen.print(2, "Initializing...");
-    Screen.print(3, " > WiFi");
-
+    Screen.print(2, "Init WiFi...");
     hasWifi = (WiFi.begin() == WL_CONNECTED);
     if (!hasWifi)
     {
@@ -75,13 +132,13 @@ void setup()
         return;
     }
     validParameters = (deviceConnectionString != NULL && *deviceConnectionString != '\0' && azureFunctionUri != NULL && *azureFunctionUri != '\0');
-    if (!validParameters)
+    if (!validParameters || iothubInit() !=0)
     {
-        Screen.print(2, "Please check parameters", true);
+        validParameters = false;
+        Screen.print(2, "IoTHub init failed", true);
         return;
     }
-    setConnectionString(deviceConnectionString);
-    EnterIdleState();
+    enterIdleState();
 }
 
 void freeWavFile()
@@ -110,7 +167,7 @@ void loop()
             if (waveFile == NULL)
             {
                 Serial.println("No enough Memory! ");
-                EnterIdleState();
+                enterIdleState();
                 return;
             }
             memset(waveFile, 0, audioSize + 1);
@@ -131,7 +188,7 @@ void loop()
                 if (wavFileSize <= 0)
                 {
                     Serial.println("ConvertToMono failed! ");
-                    EnterIdleState();
+                    enterIdleState();
                     freeWavFile();
                 }
                 else
@@ -146,7 +203,7 @@ void loop()
             {
                 Serial.println("No Data Recorded! ");
                 freeWavFile();
-                EnterIdleState();
+                enterIdleState();
             }
         }
         break;
@@ -156,49 +213,25 @@ void loop()
             if (0 == httpTriggerTranslator(waveFile, wavFileSize))
             {
                 status = Uploaded;
+                Screen.print(1, "Receiving...");
             }
             else
             {
                 Serial.println("Error happened when translating");
                 freeWavFile();
-                EnterIdleState();
+                enterIdleState();
                 Screen.print(2, "azure function failed", true);
             }
         }
         else
         {
             freeWavFile();
-            EnterIdleState();
+            enterIdleState();
             Screen.print(1, "wav not ready");
         }
         break;
     case Uploaded:
-        Screen.print(1, "Receiving...");
-        char *etag = (char *)malloc(40);
-        while (!translated)
-        {
-            const char *p = getC2DMessage(etag);
-            if (p != NULL)
-            {
-                if (strlen(p) == 0)
-                {
-                    free((void *)p);
-                    break;
-                }
-                Screen.clean();
-                Screen.print(1, "Translation: ");
-                Screen.print(2, p, true);
-                log_time("Translated");
-                completeC2DMessage((char *)etag);
-                translated = true;
-                free((void *)p);
-            }
-        }
-        translated = false;
-        status = Idle;
-        Screen.print(0, "Hold B to talk");
-        free(etag);
-        freeWavFile();
+        IoTHubClient_LL_DoWork(iotHubClientHandle);
         break;
     }
 
