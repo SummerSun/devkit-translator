@@ -21,7 +21,7 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
     try
     {
         data = await req.Content.ReadAsByteArrayAsync();
-        speechClient = new SpeechClient(req.Headers.GetValues("source").FirstOrDefault(), req.Headers.GetValues("target").FirstOrDefault());
+        speechClient = new SpeechClient(req.Headers.GetValues("source").FirstOrDefault(), "en");
     }
     catch(Exception ex)
     {
@@ -148,6 +148,19 @@ public class SpeechClient
     private const string SubscriptionKey = "7d09a0cc88ae469cbb0073472e756f98";
     public event EventHandler<ArraySegment<byte>> OnTextData;
     public event EventHandler<ArraySegment<byte>> OnEndOfTextData;
+    private static Dictionary<string, string> _lanaugeMapping = new Dictionary<string, string>
+    {
+        {"Arabic", "ar-EG"},
+        {"Chinese", "zh-CN"},
+        {"French", "fr-FR"},
+        {"German", "de-DE"},
+        {"Italian", "it-IT"},
+        {"Japanese", "ja-JP"},
+        {"Portuguese", "pt-BR"},
+        {"Russian", "ru-RU"},
+        {"Spanish", "es-ES"}
+    };
+    
     
     public SpeechClient(string source, string target)
     {
@@ -156,7 +169,9 @@ public class SpeechClient
         _webSocketClient.Options.SetRequestHeader("Authorization", auth.GetAccessTokenAsync().Result);
         _webSocketClient.Options.SetRequestHeader("X-ClientAppId", "ea66703d-90a8-436b-9bd6-7a2707a2ad99");
         _webSocketClient.Options.SetRequestHeader("X-CorrelationId", "440B2DA4");
-        this._clientWsUri = new Uri($"wss://{HostName}/speech/translate?from={source}&to={target}&features=Partial&profanity=Strict&api-version=1.0");
+        this._clientWsUri =
+            new Uri(
+                $"wss://{HostName}/speech/translate?from={_lanaugeMapping[source]}&to={target}&features=Partial&profanity=Strict&api-version=1.0");
     }
 
     public async Task Connect()

@@ -7,6 +7,8 @@
 #include "iothub_client_ll.h"
 
 #define MAX_UPLOAD_SIZE (64 * 1024)
+#define MAX_WORDS 12
+#define LANGUAGES_COUNT 9
 
 static boolean hasWifi = false;
 static const int recordedDuration = 3;
@@ -19,6 +21,12 @@ static bool validParameters = false;
 static const char *deviceConnectionString = "";
 static const char *azureFunctionUri = "";
 static IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle;
+static bool setupMode = false;
+
+static char source[MAX_WORDS] = "Chinese";
+static int curIndex = 1;
+static char allSource[LANGUAGES_COUNT][MAX_WORDS] = {"Arabic", "Chinese", "French", "German", "Italian", "Japanese", "Portuguese", "Russian", "Spanish"};
+static char temp[MAX_WORDS];
 
 enum STATUS
 {
@@ -28,7 +36,7 @@ enum STATUS
     Uploaded
 };
 
-static STATUS status;
+static STATUS status = Idle;
 
 static void logTime(const char *event)
 {
@@ -54,9 +62,8 @@ static int httpTriggerTranslator(const char *content, int length)
         return -1;
     }
     logTime("begin httppost");
-    HTTPClient client = HTTPClient(HTTP_POST, azureFunctionUri);    
+    HTTPClient client = HTTPClient(HTTP_POST, azureFunctionUri);
     client.set_header("source", source);
-    client.set_header("target", target);
     const Http_Response *response = client.send(content, length);
     logTime("response back");
     if (response != NULL && response->status_code == 200)
@@ -64,6 +71,32 @@ static int httpTriggerTranslator(const char *content, int length)
         return 0;
     }
     return -1;
+}
+
+static void scroll()
+{
+    showLanguages(curIndex + 1);
+}
+
+static void showLanguages(int index)
+{
+    Screen.clean();
+    Screen.print(0, "Press B Scroll");
+    if (index > LANGUAGES_COUNT - 1)
+    {
+        index = 0;
+    }
+    curIndex = index++;
+    sprintf(temp, "> %s", allSource[curIndex]);
+    Screen.print(1, temp);
+    for (int i = 2; i <= 3; i++)
+    {
+        if (index > LANGUAGES_COUNT - 1)
+        {
+            index = 0;
+        }
+        Screen.print(i, allSource[index++]);
+    }
 }
 
 static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE message, void *userContextCallback)
@@ -132,13 +165,15 @@ void setup()
         return;
     }
     validParameters = (deviceConnectionString != NULL && *deviceConnectionString != '\0' && azureFunctionUri != NULL && *azureFunctionUri != '\0');
-    if (!validParameters || iothubInit() !=0)
+    if (!validParameters || iothubInit() != 0)
     {
         validParameters = false;
         Screen.print(2, "IoTHub init failed", true);
         return;
     }
-    enterIdleState();
+    Screen.print(1, "Hold B to talk");
+    Screen.print(2, "Chinese or Press");
+    Screen.print(3, "A choose others");
 }
 
 void freeWavFile()
@@ -150,14 +185,8 @@ void freeWavFile()
     }
 }
 
-void loop()
+static void listenVoice()
 {
-    if (!hasWifi || !validParameters)
-    {
-        return;
-    }
-
-    uint32_t curr = millis();
     switch (status)
     {
     case Idle:
@@ -234,10 +263,44 @@ void loop()
         IoTHubClient_LL_DoWork(iotHubClientHandle);
         break;
     }
+}
 
-    curr = millis() - curr;
-    if (curr < delayTimes)
+bool IsButtonClicked(unsigned char ulPin)
+{
+    pinMode(ulPin, INPUT);
+    return digitalRead(ulPin) == LOW;
+}
+
+void loop()
+{
+    if (!hasWifi || !validParameters)
     {
-        delay(delayTimes - curr);
+        return;
     }
+    if (setupMode)
+    {
+        if (IsButtonClicked(USER_BUTTON_B))
+        {
+            scroll();
+        }
+        if (IsButtonClicked(USER_BUTTON_A))
+        {
+            strncpy(source, allSource[curIndex], MAX_WORDS);
+            setupMode = false;
+            enterIdleState();
+        }
+    }
+    else
+    {
+        if (IsButtonClicked(USER_BUTTON_A))
+        {
+            showLanguages(0);
+            setupMode = true;
+        }
+        if (!IsButtonClicked(USER_BUTTON_A))
+        {
+            listenVoice();
+        }
+    }
+    delay(200);
 }
