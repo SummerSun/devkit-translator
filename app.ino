@@ -1,10 +1,11 @@
 #include "Arduino.h"
-#include "AzureIotHub.h"
 #include "AudioClass.h"
 #include "AZ3166WiFi.h"
-#include "OLEDDisplay.h"
+#include "AzureIotHub.h"
+#include "EEPROMInterface.h"
 #include "http_client.h"
 #include "iothub_client_ll.h"
+#include "OLEDDisplay.h"
 
 #define MAX_UPLOAD_SIZE (64 * 1024)
 #define MAX_WORDS 12
@@ -17,8 +18,7 @@ static int wavFileSize;
 static const uint32_t delayTimes = 1000;
 static AudioClass Audio;
 static const int audioSize = ((32000 * recordedDuration) + 44);
-static bool validParameters = false;
-static const char *deviceConnectionString = "";
+static bool validIoT = false;
 static const char *azureFunctionUri = "";
 static IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle;
 static bool setupMode = false;
@@ -136,7 +136,13 @@ static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE
 
 static int iothubInit()
 {
-    if ((iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(deviceConnectionString, MQTT_Protocol)) == NULL)
+    EEPROMInterface eeprom;
+    uint8_t connString[AZ_IOT_HUB_MAX_LEN + 1] = {'\0'};
+    if (eeprom.read(connString, AZ_IOT_HUB_MAX_LEN, 0x00, AZ_IOT_HUB_ZONE_IDX) < 0)
+    {
+        return -1;
+    }
+    if ((iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString((const char *)connString, MQTT_Protocol)) == NULL)
     {
         return -1;
     }
@@ -164,10 +170,9 @@ void setup()
         Screen.print(2, "No Wifi");
         return;
     }
-    validParameters = (deviceConnectionString != NULL && *deviceConnectionString != '\0' && azureFunctionUri != NULL && *azureFunctionUri != '\0');
-    if (!validParameters || iothubInit() != 0)
+    validIoT = (iothubInit() == 0);
+    if (!validIoT)
     {
-        validParameters = false;
         Screen.print(2, "IoTHub init failed", true);
         return;
     }
@@ -273,7 +278,7 @@ bool IsButtonClicked(unsigned char ulPin)
 
 void loop()
 {
-    if (!hasWifi || !validParameters)
+    if (!hasWifi || !validIoT)
     {
         return;
     }
