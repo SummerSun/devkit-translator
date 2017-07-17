@@ -1,9 +1,12 @@
 {
-  "sketch": "../VoiceToTwitter.ino",
+  "sketch": "../DevKitTranslator.ino",
   "config": "deviceConnectionString",
   "provision_iot_hub": true,
-  "provision_storage": true,
-  "provision_logic_app": true,
-  "provision_azure_function": false,
-  "functionRelativePath": "azureFunction"
+  "provision_azure_function": true,
+  "functionRelativePath": "azureFunction/devkittranslator.zip",
+  "functionName": "devkittranslator",
+  "tasks": {
+    "provision": ["subscription", "iothub", "functionapp", "armtemplatedeployment", "device"],
+    "deploy": ["functiondeploy"]
+  }
 }

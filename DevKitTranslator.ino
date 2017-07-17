@@ -18,15 +18,13 @@ static int wavFileSize;
 static const uint32_t delayTimes = 1000;
 static AudioClass Audio;
 static const int audioSize = ((32000 * recordedDuration) + 44);
-static bool validIoT = false;
-static const char *azureFunctionUri = "";
+static bool validParameters = false;
 static IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle;
 static bool setupMode = false;
-
 static char source[MAX_WORDS] = "Chinese";
 static int curIndex = 1;
+static const char *azureFunctionUri = "http://devkittranslator.azurewebsites.net/api/devkit-translator";
 static char allSource[LANGUAGES_COUNT][MAX_WORDS] = {"Arabic", "Chinese", "French", "German", "Italian", "Japanese", "Portuguese", "Russian", "Spanish"};
-static char temp[MAX_WORDS];
 
 enum STATUS
 {
@@ -37,12 +35,6 @@ enum STATUS
 };
 
 static STATUS status = Idle;
-
-static void logTime(const char *event)
-{
-    time_t t = time(NULL);
-    Serial.printf("%s: %s", event, ctime(&t));
-}
 
 static void enterIdleState(bool clean = true)
 {
@@ -61,11 +53,9 @@ static int httpTriggerTranslator(const char *content, int length)
         Serial.println("Content not valid");
         return -1;
     }
-    logTime("begin httppost");
     HTTPClient client = HTTPClient(HTTP_POST, azureFunctionUri);
     client.set_header("source", source);
     const Http_Response *response = client.send(content, length);
-    logTime("response back");
     if (response != NULL && response->status_code == 200)
     {
         return 0;
@@ -73,12 +63,7 @@ static int httpTriggerTranslator(const char *content, int length)
     return -1;
 }
 
-static void scroll()
-{
-    showLanguages(curIndex + 1);
-}
-
-static void showLanguages(int index)
+static void scrollLanguages(int index)
 {
     Screen.clean();
     Screen.print(0, "Press B Scroll");
@@ -87,6 +72,7 @@ static void showLanguages(int index)
         index = 0;
     }
     curIndex = index++;
+    char temp[MAX_WORDS];
     sprintf(temp, "> %s", allSource[curIndex]);
     Screen.print(1, temp);
     for (int i = 2; i <= 3; i++)
@@ -97,6 +83,7 @@ static void showLanguages(int index)
         }
         Screen.print(i, allSource[index++]);
     }
+    free(temp);
 }
 
 static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE message, void *userContextCallback)
@@ -120,12 +107,8 @@ static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE
         }
         else
         {
-            memcpy(temp, buffer, size);
-            temp[size] = '\0';
             Screen.print(1, "Translation: ");
-            Screen.print(2, temp, true);
-            logTime("translated");
-            free(temp);
+            Screen.print(2, buffer, true);
             result = IOTHUBMESSAGE_ACCEPTED;
         }
     }
@@ -170,18 +153,16 @@ void setup()
         Screen.print(2, "No Wifi");
         return;
     }
-    validIoT = (iothubInit() == 0);
-    if (!validIoT)
+    validParameters = (iothubInit() == 0) && (azureFunctionUri != NULL && *azureFunctionUri != '\0');
+    if (!validParameters)
     {
         Screen.print(2, "IoTHub init failed", true);
         return;
     }
-    Screen.print(1, "Hold B to talk");
-    Screen.print(2, "Chinese or Press");
-    Screen.print(3, "A choose others");
+    Screen.print(1, "Hold B to talk Chinese or Press A choose others", true);
 }
 
-void freeWavFile()
+static void freeWavFile()
 {
     if (waveFile != NULL)
     {
@@ -270,7 +251,7 @@ static void listenVoice()
     }
 }
 
-bool IsButtonClicked(unsigned char ulPin)
+static bool IsButtonClicked(unsigned char ulPin)
 {
     pinMode(ulPin, INPUT);
     return digitalRead(ulPin) == LOW;
@@ -278,7 +259,7 @@ bool IsButtonClicked(unsigned char ulPin)
 
 void loop()
 {
-    if (!hasWifi || !validIoT)
+    if (!hasWifi || !validParameters)
     {
         return;
     }
@@ -286,7 +267,7 @@ void loop()
     {
         if (IsButtonClicked(USER_BUTTON_B))
         {
-            scroll();
+            scrollLanguages(curIndex + 1);
         }
         if (IsButtonClicked(USER_BUTTON_A))
         {
@@ -299,10 +280,10 @@ void loop()
     {
         if (IsButtonClicked(USER_BUTTON_A))
         {
-            showLanguages(0);
+            scrollLanguages(0);
             setupMode = true;
         }
-        if (!IsButtonClicked(USER_BUTTON_A))
+        else
         {
             listenVoice();
         }
