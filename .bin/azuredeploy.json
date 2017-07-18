@@ -32,18 +32,19 @@
         }
     },
     "variables": {
-        "cognitiveServiceName": "[concat('cognitiveService-', uniquestring(resourceGroup().id))]"
+        "cognitiveServiceName": "[concat('cognitiveService', uniquestring(resourceGroup().id))]"
     },
     "resources": [
-         {
+        {
             "name": "[variables('cognitiveServiceName')]",
             "type": "Microsoft.CognitiveServices/accounts",
-            "apiVersion": "2017-04-18",
             "sku": {
-                "name": "F0"
+                "name": "S1"
             },
             "kind": "SpeechTranslation",
-            "location": "[variables('resourceLocation')]",
+            "apiVersion": "2017-04-18",
+            "location": "global",
+            "tags": {},
             "properties": {}
         },
         {
@@ -104,7 +105,8 @@
                 }
             },
             "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'iothubTemplate')]"
+                "[resourceId('Microsoft.Resources/deployments', 'iothubTemplate')]",
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('cognitiveServiceName'))]"
             ]
         }
     ]

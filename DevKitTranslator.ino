@@ -3,6 +3,7 @@
 #include "AZ3166WiFi.h"
 #include "AzureIotHub.h"
 #include "EEPROMInterface.h"
+#include "azure_config.h"
 #include "http_client.h"
 #include "iothub_client_ll.h"
 #include "OLEDDisplay.h"
@@ -11,19 +12,18 @@
 #define MAX_WORDS 12
 #define LANGUAGES_COUNT 9
 
-static boolean hasWifi = false;
+static boolean ready = false;
 static const int recordedDuration = 3;
 static char *waveFile = NULL;
 static int wavFileSize;
 static const uint32_t delayTimes = 1000;
 static AudioClass Audio;
 static const int audioSize = ((32000 * recordedDuration) + 44);
-static bool validParameters = false;
 static IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle;
 static bool setupMode = false;
 static char source[MAX_WORDS] = "Chinese";
 static int curIndex = 1;
-static const char *azureFunctionUri = "http://devkittranslator.azurewebsites.net/api/devkit-translator";
+static char azureFunctionUri[128];
 static char allSource[LANGUAGES_COUNT][MAX_WORDS] = {"Arabic", "Chinese", "French", "German", "Italian", "Japanese", "Portuguese", "Russian", "Spanish"};
 
 enum STATUS
@@ -83,7 +83,6 @@ static void scrollLanguages(int index)
         }
         Screen.print(i, allSource[index++]);
     }
-    free(temp);
 }
 
 static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE message, void *userContextCallback)
@@ -94,7 +93,10 @@ static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE
 
     if (IoTHubMessage_GetByteArray(message, (const unsigned char **)&buffer, &size) != IOTHUB_MESSAGE_OK)
     {
-        Screen.print(1, "unable to do IoTHubMessage_GetByteArray", true);
+        if (status == Uploaded)
+        {
+            Screen.print(1, "unable to do IoTHubMessage_GetByteArray", true);
+        }
         result = IOTHUBMESSAGE_REJECTED;
     }
     else
@@ -102,18 +104,30 @@ static IOTHUBMESSAGE_DISPOSITION_RESULT c2dMessageCallback(IOTHUB_MESSAGE_HANDLE
         char *temp = (char *)malloc(size + 1);
         if (temp == NULL)
         {
-            Screen.print(1, "Failed to malloc");
+            if (status == Uploaded)
+            {
+                Screen.print(1, "Failed to malloc", true);
+            }
             result = IOTHUBMESSAGE_REJECTED;
         }
         else
         {
-            Screen.print(1, "Translation: ");
-            Screen.print(2, buffer, true);
-            result = IOTHUBMESSAGE_ACCEPTED;
+            memcpy(temp, buffer, size);
+            temp[size] = '\0';
+            if (status == Uploaded)
+            {
+                Screen.print(1, "Translation: ");
+                Screen.print(2, temp, true);
+            }
         }
+        free(temp);
+        result = IOTHUBMESSAGE_ACCEPTED;
     }
-    freeWavFile();
-    enterIdleState(false);
+    if (status == Uploaded)
+    {
+        freeWavFile();
+        enterIdleState(false);
+    }
     return result;
 }
 
@@ -147,18 +161,19 @@ void setup()
     Screen.clean();
     Screen.print(0, "DevKitTranslator");
     Screen.print(2, "Init WiFi...");
-    hasWifi = (WiFi.begin() == WL_CONNECTED);
-    if (!hasWifi)
+    ready = (WiFi.begin() == WL_CONNECTED);
+    if (!ready)
     {
         Screen.print(2, "No Wifi");
         return;
     }
-    validParameters = (iothubInit() == 0) && (azureFunctionUri != NULL && *azureFunctionUri != '\0');
-    if (!validParameters)
+    ready = (iothubInit() == 0 && strlen(AZURE_FUNCTION_APP_NAME) != 0);
+    if (!ready)
     {
-        Screen.print(2, "IoTHub init failed", true);
+        Screen.print(2, "Azure Resource Init Failed", true);
         return;
     }
+    sprintf(azureFunctionUri, "http://%s.azurewebsites.net/api/devkit-translator", (char *)AZURE_FUNCTION_APP_NAME);
     Screen.print(1, "Hold B to talk Chinese or Press A choose others", true);
 }
 
@@ -245,9 +260,6 @@ static void listenVoice()
             Screen.print(1, "wav not ready");
         }
         break;
-    case Uploaded:
-        IoTHubClient_LL_DoWork(iotHubClientHandle);
-        break;
     }
 }
 
@@ -259,10 +271,13 @@ static bool IsButtonClicked(unsigned char ulPin)
 
 void loop()
 {
-    if (!hasWifi || !validParameters)
+    if (!ready)
     {
         return;
     }
+
+    IoTHubClient_LL_DoWork(iotHubClientHandle);
+
     if (setupMode)
     {
         if (IsButtonClicked(USER_BUTTON_B))
