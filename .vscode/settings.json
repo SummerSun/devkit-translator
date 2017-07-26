@@ -1,6 +1,0 @@
-{
-    "files.associations": {
-        "iothub_client_ll.c": "cpp",
-        "buffer.c": "cpp"
-    }
-}
